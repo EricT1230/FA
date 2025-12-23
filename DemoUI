@@ -1,0 +1,898 @@
+import React, { useMemo, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Search, ExternalLink, Bookmark, BookmarkCheck, EyeOff, Filter, SlidersHorizontal, Info, Bell, User, Sparkles, ArrowUpDown } from "lucide-react";
+
+// ------------------------------------------------------------
+// MVP UI Prototype (Mock) — Yourator + We Work Remotely
+// - No backend required
+// - Demonstrates: Jobs list, filters, scoring breakdown, actions
+// ------------------------------------------------------------
+
+type SourceKey = "wwr" | "yourator";
+
+type Job = {
+  id: string;
+  sourceKey: SourceKey;
+  title: string;
+  url: string;
+  postedAt: string; // ISO
+  category: string;
+  skills: string[];
+  remote: boolean;
+  applicantsMin?: number;
+  applicantsMax?: number;
+  ehrTwd?: number; // effective hourly rate in TWD
+  score: number; // 0-100
+  reasonsTop: string[];
+  breakdown: {
+    P: number; // reward
+    Fit: number;
+    Q: number;
+    R: number;
+    Comp: number;
+  };
+  reasonsPositive: string[];
+  reasonsNegative: string[];
+  fxAsOf: string;
+};
+
+const mockJobs: Job[] = [
+  {
+    id: "j1",
+    sourceKey: "wwr",
+    title: "Frontend Engineer – Next.js + React (Remote)",
+    url: "https://weworkremotely.com/",
+    postedAt: "2025-12-23T02:10:00Z",
+    category: "Web/Frontend",
+    skills: ["Next.js", "React", "TypeScript", "Tailwind", "API"],
+    remote: true,
+    applicantsMin: 10,
+    applicantsMax: 15,
+    ehrTwd: 1800,
+    score: 82,
+    reasonsTop: ["有效時薪高於同類別 p75", "技能命中：React/Next.js", "競爭低：已投稿約 13"],
+    breakdown: { P: 0.82, Fit: 0.76, Q: 0.62, R: 0.20, Comp: 0.38 },
+    reasonsPositive: ["有效時薪顯著高於同類別 p75", "技能命中率高（前端框架與 TS）", "案子描述含交付物與技術細節"],
+    reasonsNegative: ["競爭中等（投稿區間 10–15）", "需求未明確列出驗收方式"],
+    fxAsOf: "2025-12-23T00:00:00Z",
+  },
+  {
+    id: "j2",
+    sourceKey: "yourator",
+    title: "網站前端工程師（接案/約聘）",
+    url: "https://www.yourator.co/jobs",
+    postedAt: "2025-12-22T11:30:00Z",
+    category: "Web/Frontend",
+    skills: ["React", "Next.js", "UI", "Figma"],
+    remote: false,
+    ehrTwd: 1200,
+    score: 71,
+    reasonsTop: ["技能吻合：React/Next.js", "需求描述清楚", "競爭指標缺值（採保守）"],
+    breakdown: { P: 0.63, Fit: 0.78, Q: 0.70, R: 0.18, Comp: 0.40 },
+    reasonsPositive: ["技能匹配度高（React/Next.js）", "工作內容描述具體（頁面/元件）"],
+    reasonsNegative: ["遠端限制（偏現場/混合）", "投稿人數未提供（使用預設競爭懲罰）"],
+    fxAsOf: "2025-12-23T00:00:00Z",
+  },
+  {
+    id: "j3",
+    sourceKey: "wwr",
+    title: "Data / Scraping Contractor – ETL + APIs",
+    url: "https://weworkremotely.com/",
+    postedAt: "2025-12-21T19:05:00Z",
+    category: "Data/Scraping",
+    skills: ["Python", "Scraping", "ETL", "PostgreSQL"],
+    remote: true,
+    applicantsMin: 25,
+    applicantsMax: 50,
+    ehrTwd: 2200,
+    score: 69,
+    reasonsTop: ["有效時薪高", "需求含技術細節", "競爭高（25–50）"],
+    breakdown: { P: 0.90, Fit: 0.52, Q: 0.64, R: 0.28, Comp: 0.88 },
+    reasonsPositive: ["有效時薪高於同類別 p75", "需求提及 ETL 與 DB"],
+    reasonsNegative: ["競爭高（投稿區間 25–50）", "技能命中率中等（需 Python/ETL）"],
+    fxAsOf: "2025-12-23T00:00:00Z",
+  },
+  {
+    id: "j4",
+    sourceKey: "yourator",
+    title: "全端工程師（Next.js + Node.js）",
+    url: "https://www.yourator.co/jobs",
+    postedAt: "2025-12-20T08:40:00Z",
+    category: "Web/Fullstack",
+    skills: ["Next.js", "Node.js", "PostgreSQL", "Auth"],
+    remote: true,
+    ehrTwd: 1450,
+    score: 77,
+    reasonsTop: ["技能命中：全端堆疊", "遠端", "競爭指標缺值（採保守）"],
+    breakdown: { P: 0.72, Fit: 0.80, Q: 0.58, R: 0.22, Comp: 0.40 },
+    reasonsPositive: ["技能命中率高（Next.js/Node/DB）", "可遠端"],
+    reasonsNegative: ["需求未標示固定價/時薪（需再確認）", "投稿人數未提供（使用預設競爭懲罰）"],
+    fxAsOf: "2025-12-23T00:00:00Z",
+  },
+];
+
+function clamp01(x: number) {
+  return Math.max(0, Math.min(1, x));
+}
+
+function formatAgo(iso: string) {
+  const t = new Date(iso).getTime();
+  const now = Date.now();
+  const diff = Math.max(0, now - t);
+  const min = Math.floor(diff / 60000);
+  if (min < 60) return `${min} 分鐘前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr} 小時前`;
+  const d = Math.floor(hr / 24);
+  return `${d} 天前`;
+}
+
+function formatTwd(n?: number) {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("zh-Hant-TW", { maximumFractionDigits: 0 }).format(n);
+}
+
+function sourceLabel(s: SourceKey) {
+  return s === "wwr" ? "WWR" : "Yourator";
+}
+
+function sourceTone(s: SourceKey) {
+  return s === "wwr" ? "bg-slate-900 text-white" : "bg-emerald-700 text-white";
+}
+
+function scoreBand(score: number) {
+  if (score >= 80) return { label: "強烈推薦", hint: "值得優先點開" };
+  if (score >= 70) return { label: "可投", hint: "符合條件但需確認細節" };
+  if (score >= 60) return { label: "觀望", hint: "可能需要補資訊或競爭偏高" };
+  return { label: "低優先", hint: "建議先略過" };
+}
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full border px-2.5 py-1 text-xs text-slate-700">
+      {children}
+    </span>
+  );
+}
+
+function MetricBar({ label, value, invert }: { label: string; value: number; invert?: boolean }) {
+  const v = clamp01(value);
+  const pct = Math.round((invert ? 1 - v : v) * 100);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs text-slate-600">
+        <span>{label}</span>
+        <span className="tabular-nums">{pct}%</span>
+      </div>
+      <div className="h-2 w-full rounded-full bg-slate-100">
+        <div className="h-2 rounded-full bg-slate-800" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function JobCardRow({
+  job,
+  saved,
+  hidden,
+  onSave,
+  onHide,
+  onOpen,
+  onDetail,
+}: {
+  job: Job;
+  saved: boolean;
+  hidden: boolean;
+  onSave: () => void;
+  onHide: () => void;
+  onOpen: () => void;
+  onDetail: () => void;
+}) {
+  const band = scoreBand(job.score);
+  const applicants =
+    job.applicantsMin != null && job.applicantsMax != null
+      ? `${job.applicantsMin}–${job.applicantsMax}`
+      : "—";
+
+  return (
+    <Card className={`rounded-2xl ${hidden ? "opacity-50" : ""}`}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs ${sourceTone(job.sourceKey)}`}>
+                {sourceLabel(job.sourceKey)}
+              </span>
+              {job.remote ? (
+                <Badge variant="secondary" className="rounded-full">遠端</Badge>
+              ) : (
+                <Badge variant="outline" className="rounded-full">非遠端</Badge>
+              )}
+              <Badge variant="outline" className="rounded-full">{job.category}</Badge>
+              <Pill>{formatAgo(job.postedAt)}</Pill>
+              <Pill>投稿：{applicants}</Pill>
+              <Pill>FX：{new Date(job.fxAsOf).toLocaleDateString("zh-Hant-TW")}</Pill>
+            </div>
+
+            <button
+              onClick={onDetail}
+              className="mt-2 line-clamp-2 w-full text-left text-base font-semibold text-slate-900 hover:underline"
+            >
+              {job.title}
+            </button>
+
+            <div className="mt-2 flex flex-wrap gap-2">
+              {job.skills.slice(0, 7).map((s) => (
+                <Badge key={s} variant="secondary" className="rounded-full">
+                  {s}
+                </Badge>
+              ))}
+              {job.skills.length > 7 ? <Badge variant="outline" className="rounded-full">+{job.skills.length - 7}</Badge> : null}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-700">
+              <span className="font-medium">Reasons：</span>
+              <span className="line-clamp-1">{job.reasonsTop.join(" / ")}</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-end gap-2">
+            <div className="rounded-2xl border bg-white px-3 py-2 text-right shadow-sm">
+              <div className="text-[11px] text-slate-500">Score</div>
+              <div className="text-2xl font-bold tabular-nums text-slate-900">{job.score}</div>
+              <div className="mt-1 text-[11px] text-slate-500">{band.label}</div>
+            </div>
+
+            <div className="rounded-2xl border bg-white px-3 py-2 text-right shadow-sm">
+              <div className="text-[11px] text-slate-500">有效時薪（TWD/hr）</div>
+              <div className="text-lg font-semibold tabular-nums text-slate-900">{formatTwd(job.ehrTwd)}</div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant={saved ? "default" : "secondary"}
+                className="rounded-2xl"
+                onClick={onSave}
+              >
+                {saved ? (
+                  <>
+                    <BookmarkCheck className="mr-2 h-4 w-4" /> 已收藏
+                  </>
+                ) : (
+                  <>
+                    <Bookmark className="mr-2 h-4 w-4" /> 收藏
+                  </>
+                )}
+              </Button>
+              <Button variant="outline" className="rounded-2xl" onClick={onHide}>
+                <EyeOff className="mr-2 h-4 w-4" /> {hidden ? "已忽略" : "忽略"}
+              </Button>
+              <Button variant="outline" className="rounded-2xl" onClick={onOpen}>
+                <ExternalLink className="mr-2 h-4 w-4" /> 原站
+              </Button>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function MVPJobsAggregatorUI() {
+  const [tab, setTab] = useState<"jobs" | "reco" | "saved" | "alerts" | "profile">("jobs");
+  const [query, setQuery] = useState("");
+  const [source, setSource] = useState<"all" | SourceKey>("all");
+  const [remoteOnly, setRemoteOnly] = useState(false);
+  const [minScore, setMinScore] = useState(70);
+  const [maxApplicants, setMaxApplicants] = useState(20);
+  const [sortBy, setSortBy] = useState<"score" | "ehr" | "posted">("score");
+  const [order, setOrder] = useState<"desc" | "asc">("desc");
+  const [displayCurrency, setDisplayCurrency] = useState("TWD");
+
+  // actions
+  const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [hiddenIds, setHiddenIds] = useState<string[]>([]);
+
+  // detail dialog
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detailJob = useMemo(() => mockJobs.find((j) => j.id === detailId) ?? null, [detailId]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const list = mockJobs
+      .filter((j) => {
+        if (source !== "all" && j.sourceKey !== source) return false;
+        if (remoteOnly && !j.remote) return false;
+        if (j.score < minScore) return false;
+        const applicantsMid =
+          j.applicantsMin != null && j.applicantsMax != null
+            ? Math.round((j.applicantsMin + j.applicantsMax) / 2)
+            : null;
+        if (applicantsMid != null && applicantsMid > maxApplicants) return false;
+        if (!q) return true;
+        const hay = `${j.title} ${j.category} ${j.skills.join(" ")}`.toLowerCase();
+        return hay.includes(q);
+      })
+      .sort((a, b) => {
+        const dir = order === "desc" ? -1 : 1;
+        if (sortBy === "score") return (a.score - b.score) * dir;
+        if (sortBy === "ehr") return ((a.ehrTwd ?? 0) - (b.ehrTwd ?? 0)) * dir;
+        return (new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime()) * dir;
+      });
+    return list;
+  }, [query, source, remoteOnly, minScore, maxApplicants, sortBy, order]);
+
+  const recommended = useMemo(() => {
+    // MVP: simple: top scores, prefer remote, prefer lower competition (by applicantsMid)
+    const list = [...mockJobs]
+      .filter((j) => j.score >= 70)
+      .sort((a, b) => {
+        const aMid = a.applicantsMin != null && a.applicantsMax != null ? (a.applicantsMin + a.applicantsMax) / 2 : 999;
+        const bMid = b.applicantsMin != null && b.applicantsMax != null ? (b.applicantsMin + b.applicantsMax) / 2 : 999;
+        // primary: score desc, secondary: applicants asc, tertiary: ehr desc
+        if (b.score !== a.score) return b.score - a.score;
+        if (aMid !== bMid) return aMid - bMid;
+        return (b.ehrTwd ?? 0) - (a.ehrTwd ?? 0);
+      });
+    return list;
+  }, []);
+
+  function toggleSave(id: string) {
+    setSavedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function toggleHide(id: string) {
+    setHiddenIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function openSource(url: string) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* Top Nav */}
+      <div className="sticky top-0 z-20 border-b bg-white/80 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-900 text-white shadow">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-slate-900">接案彙總評分平台</div>
+              <div className="text-xs text-slate-500">MVP Prototype · Yourator + WWR</div>
+            </div>
+          </div>
+
+          <div className="hidden flex-1 items-center justify-center gap-2 md:flex">
+            <div className="relative w-full max-w-xl">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜尋：Next.js、React、爬蟲、RAG…"
+                className="h-10 rounded-2xl pl-10"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 md:flex">
+              <Label className="text-xs text-slate-600">顯示幣別</Label>
+              <Select value={displayCurrency} onValueChange={setDisplayCurrency}>
+                <SelectTrigger className="h-10 w-[110px] rounded-2xl">
+                  <SelectValue placeholder="TWD" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="TWD">TWD</SelectItem>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="EUR">EUR</SelectItem>
+                  <SelectItem value="JPY">JPY</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button variant="outline" className="h-10 rounded-2xl" onClick={() => setTab("reco")}> 
+              <Sparkles className="mr-2 h-4 w-4" /> 推薦
+            </Button>
+            <Button variant="outline" className="h-10 rounded-2xl" onClick={() => setTab("alerts")}> 
+              <Bell className="mr-2 h-4 w-4" /> 通知
+            </Button>
+            <Button variant="outline" className="h-10 rounded-2xl" onClick={() => setTab("profile")}> 
+              <User className="mr-2 h-4 w-4" /> Profile
+            </Button>
+          </div>
+        </div>
+
+        {/* Mobile search */}
+        <div className="px-4 pb-3 md:hidden">
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜尋：Next.js、React、爬蟲、RAG…"
+              className="h-10 rounded-2xl pl-10"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="mx-auto grid max-w-7xl grid-cols-1 gap-4 px-4 py-6 md:grid-cols-12">
+        {/* Sidebar/Filters */}
+        <div className="md:col-span-4 lg:col-span-3">
+          <Card className="rounded-2xl">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Filter className="h-4 w-4" /> 篩選條件
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="space-y-2">
+                <Label className="text-xs text-slate-600">來源</Label>
+                <Select value={source} onValueChange={(v: any) => setSource(v)}>
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="全部" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部</SelectItem>
+                    <SelectItem value="wwr">WWR</SelectItem>
+                    <SelectItem value="yourator">Yourator</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-center justify-between rounded-2xl border p-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-slate-900">只看遠端</div>
+                  <div className="text-xs text-slate-500">Remote-only</div>
+                </div>
+                <Switch checked={remoteOnly} onCheckedChange={setRemoteOnly} />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-slate-600">最低分數</Label>
+                  <span className="text-xs tabular-nums text-slate-700">{minScore}</span>
+                </div>
+                <Slider value={[minScore]} min={0} max={100} step={1} onValueChange={(v) => setMinScore(v[0] ?? 70)} />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-slate-600">最大投稿人數（中位數）</Label>
+                  <span className="text-xs tabular-nums text-slate-700">{maxApplicants}</span>
+                </div>
+                <Slider value={[maxApplicants]} min={1} max={100} step={1} onValueChange={(v) => setMaxApplicants(v[0] ?? 20)} />
+                <div className="text-xs text-slate-500">缺值會使用來源預設競爭懲罰（WWR 0.5 / Yourator 0.4）</div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <Label className="text-xs text-slate-600">排序</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Select value={sortBy} onValueChange={(v: any) => setSortBy(v)}>
+                    <SelectTrigger className="rounded-2xl">
+                      <SelectValue placeholder="score" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="score">Score</SelectItem>
+                      <SelectItem value="ehr">有效時薪</SelectItem>
+                      <SelectItem value="posted">發佈時間</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={order} onValueChange={(v: any) => setOrder(v)}>
+                    <SelectTrigger className="rounded-2xl">
+                      <SelectValue placeholder="desc" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="desc">由高到低</SelectItem>
+                      <SelectItem value="asc">由低到高</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  className="w-full rounded-2xl"
+                  onClick={() => {
+                    setQuery("");
+                    setSource("all");
+                    setRemoteOnly(false);
+                    setMinScore(70);
+                    setMaxApplicants(20);
+                    setSortBy("score");
+                    setOrder("desc");
+                  }}
+                >
+                  <SlidersHorizontal className="mr-2 h-4 w-4" /> 重設
+                </Button>
+              </div>
+
+              <Separator />
+
+              <div className="rounded-2xl bg-slate-900 p-3 text-white">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <Info className="h-4 w-4" /> MVP 介面說明
+                </div>
+                <div className="mt-2 text-xs text-white/80 leading-relaxed">
+                  這是 UI 原型：展示清單、篩選、分數拆解與動作（收藏/忽略/導出）。
+                  實際系統會由 Worker 管線寫入 jobs/job_scores，再由 API 供應。
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Main Content */}
+        <div className="md:col-span-8 lg:col-span-9">
+          <Tabs value={tab} onValueChange={(v: any) => setTab(v)}>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <TabsList className="w-full justify-start rounded-2xl bg-white md:w-auto">
+                <TabsTrigger value="jobs" className="rounded-2xl">
+                  Jobs
+                </TabsTrigger>
+                <TabsTrigger value="reco" className="rounded-2xl">
+                  Recommendations
+                </TabsTrigger>
+                <TabsTrigger value="saved" className="rounded-2xl">
+                  Saved
+                </TabsTrigger>
+                <TabsTrigger value="alerts" className="rounded-2xl">
+                  Alerts
+                </TabsTrigger>
+                <TabsTrigger value="profile" className="rounded-2xl">
+                  Profile
+                </TabsTrigger>
+              </TabsList>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Pill>
+                  <span className="mr-1 inline-flex items-center gap-1">
+                    <ArrowUpDown className="h-3 w-3" />
+                    排序：{sortBy} / {order}
+                  </span>
+                </Pill>
+                <Pill>顯示幣別：{displayCurrency}</Pill>
+                <Pill>符合條件：{filtered.length} 筆</Pill>
+              </div>
+            </div>
+
+            <TabsContent value="jobs" className="mt-4 space-y-3">
+              <div className="space-y-3">
+                {filtered.map((job) => (
+                  <JobCardRow
+                    key={job.id}
+                    job={job}
+                    saved={savedIds.includes(job.id)}
+                    hidden={hiddenIds.includes(job.id)}
+                    onSave={() => toggleSave(job.id)}
+                    onHide={() => toggleHide(job.id)}
+                    onOpen={() => openSource(job.url)}
+                    onDetail={() => setDetailId(job.id)}
+                  />
+                ))}
+
+                {filtered.length === 0 ? (
+                  <Card className="rounded-2xl">
+                    <CardContent className="p-8 text-center">
+                      <div className="text-base font-semibold text-slate-900">沒有符合條件的案件</div>
+                      <div className="mt-1 text-sm text-slate-600">請放寬條件（例如降低最低分數或提高最大投稿人數）。</div>
+                    </CardContent>
+                  </Card>
+                ) : null}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="reco" className="mt-4 space-y-3">
+              <Card className="rounded-2xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">今日推薦（MVP 模擬）</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm text-slate-700">
+                  邏輯：Score ≥ 70，優先分數高、競爭低、有效時薪高。
+                </CardContent>
+              </Card>
+
+              <div className="space-y-3">
+                {recommended.map((job) => (
+                  <JobCardRow
+                    key={job.id}
+                    job={job}
+                    saved={savedIds.includes(job.id)}
+                    hidden={hiddenIds.includes(job.id)}
+                    onSave={() => toggleSave(job.id)}
+                    onHide={() => toggleHide(job.id)}
+                    onOpen={() => openSource(job.url)}
+                    onDetail={() => setDetailId(job.id)}
+                  />
+                ))}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="saved" className="mt-4 space-y-3">
+              <Card className="rounded-2xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">已收藏</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm text-slate-700">收藏後可在此集中檢視與導回原站投遞。</CardContent>
+              </Card>
+
+              <div className="space-y-3">
+                {mockJobs
+                  .filter((j) => savedIds.includes(j.id))
+                  .map((job) => (
+                    <JobCardRow
+                      key={job.id}
+                      job={job}
+                      saved={true}
+                      hidden={hiddenIds.includes(job.id)}
+                      onSave={() => toggleSave(job.id)}
+                      onHide={() => toggleHide(job.id)}
+                      onOpen={() => openSource(job.url)}
+                      onDetail={() => setDetailId(job.id)}
+                    />
+                  ))}
+
+                {savedIds.length === 0 ? (
+                  <Card className="rounded-2xl">
+                    <CardContent className="p-8 text-center">
+                      <div className="text-base font-semibold text-slate-900">尚未收藏任何案件</div>
+                      <div className="mt-1 text-sm text-slate-600">在清單按「收藏」即可加入。</div>
+                    </CardContent>
+                  </Card>
+                ) : null}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="alerts" className="mt-4 space-y-3">
+              <Card className="rounded-2xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">通知（MVP 示意）</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 text-sm text-slate-700">
+                  <div className="rounded-2xl border p-4">
+                    <div className="font-semibold text-slate-900">每日摘要（09:00）</div>
+                    <div className="mt-1 text-slate-600">推送今日 Top 10（分數高、競爭低優先）。</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Badge variant="secondary" className="rounded-full">minScore=70</Badge>
+                      <Badge variant="secondary" className="rounded-full">maxApplicants=20</Badge>
+                      <Badge variant="secondary" className="rounded-full">channel=Email（可擴 LINE/Telegram）</Badge>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border p-4">
+                    <div className="font-semibold text-slate-900">即時觸發（Realtime）</div>
+                    <div className="mt-1 text-slate-600">新案子進來且分數達門檻即推送（防重）。</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Badge variant="secondary" className="rounded-full">minScore=80</Badge>
+                      <Badge variant="secondary" className="rounded-full">remoteOnly=true</Badge>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-slate-500">
+                    真實系統會由 alerts/notifications 表與 notifier worker 實作，並以 DB unique key 防止重複。
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="profile" className="mt-4 space-y-3">
+              <Card className="rounded-2xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Profile（MVP 示意）</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 text-sm text-slate-700">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border p-4">
+                      <div className="font-semibold text-slate-900">技能（Skills）</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {[
+                          "Next.js",
+                          "React",
+                          "TypeScript",
+                          "Node.js",
+                          "PostgreSQL",
+                          "爬蟲",
+                        ].map((s) => (
+                          <Badge key={s} variant="secondary" className="rounded-full">
+                            {s}
+                          </Badge>
+                        ))}
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">MVP 可先用 tag input，後端存 user_profiles.skills[]</div>
+                    </div>
+
+                    <div className="rounded-2xl border p-4">
+                      <div className="font-semibold text-slate-900">底線（Min EHR, TWD/hr）</div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <Input className="h-10 rounded-2xl" defaultValue="1200" />
+                        <Badge variant="outline" className="rounded-full">TWD/hr</Badge>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">用於 Eligibility filter 與評分偏好</div>
+                    </div>
+
+                    <div className="rounded-2xl border p-4">
+                      <div className="font-semibold text-slate-900">競爭偏好</div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-medium">偏好低競爭</div>
+                          <div className="text-xs text-slate-500">preferLowCompetition</div>
+                        </div>
+                        <Switch defaultChecked />
+                      </div>
+                      <div className="mt-3">
+                        <Label className="text-xs text-slate-600">舒適門檻 a0</Label>
+                        <div className="mt-2 flex items-center gap-2">
+                          <Input className="h-10 w-24 rounded-2xl" defaultValue="5" />
+                          <span className="text-xs text-slate-500">超過 5 投稿開始顯著扣分</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border p-4">
+                      <div className="font-semibold text-slate-900">顯示幣別</div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <Badge variant="secondary" className="rounded-full">{displayCurrency}</Badge>
+                        <span className="text-xs text-slate-500">（UI 轉換；計分基準固定 TWD）</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Button className="rounded-2xl">儲存（示意）</Button>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </div>
+
+      {/* Detail Dialog */}
+      <Dialog open={detailId != null} onOpenChange={(o) => !o && setDetailId(null)}>
+        <DialogContent className="max-w-3xl rounded-2xl">
+          {detailJob ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-lg">{detailJob.title}</DialogTitle>
+              </DialogHeader>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="md:col-span-2">
+                  <Card className="rounded-2xl">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base">Why this score</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <MetricBar label="Reward (P)" value={detailJob.breakdown.P} />
+                        <MetricBar label="Fit" value={detailJob.breakdown.Fit} />
+                        <MetricBar label="Quality (Q)" value={detailJob.breakdown.Q} />
+                        <MetricBar label="Risk (R)" value={detailJob.breakdown.R} invert />
+                        <MetricBar label="Competition (Comp)" value={detailJob.breakdown.Comp} invert />
+                      </div>
+
+                      <Separator />
+
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">正向原因</div>
+                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                            {detailJob.reasonsPositive.map((r, i) => (
+                              <li key={i}>{r}</li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">扣分原因</div>
+                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                            {detailJob.reasonsNegative.map((r, i) => (
+                              <li key={i}>{r}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl bg-slate-50 p-3 text-xs text-slate-600">
+                        <div className="font-semibold text-slate-900">計算快照</div>
+                        <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <div>有效時薪（TWD/hr）：<span className="font-semibold tabular-nums">{formatTwd(detailJob.ehrTwd)}</span></div>
+                          <div>FX as-of：<span className="font-semibold">{new Date(detailJob.fxAsOf).toLocaleString("zh-Hant-TW")}</span></div>
+                          <div>投稿人數：<span className="font-semibold">{detailJob.applicantsMin != null && detailJob.applicantsMax != null ? `${detailJob.applicantsMin}–${detailJob.applicantsMax}` : "—（使用預設）"}</span></div>
+                          <div>來源：<span className="font-semibold">{sourceLabel(detailJob.sourceKey)}</span></div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div className="space-y-3">
+                  <Card className="rounded-2xl">
+                    <CardContent className="p-4">
+                      <div className="flex items-baseline justify-between">
+                        <div className="text-xs text-slate-500">Score</div>
+                        <div className="text-3xl font-bold tabular-nums text-slate-900">{detailJob.score}</div>
+                      </div>
+                      <div className="mt-2 text-sm text-slate-700">
+                        有效時薪（TWD/hr）：<span className="font-semibold tabular-nums">{formatTwd(detailJob.ehrTwd)}</span>
+                      </div>
+                      <div className="mt-2 text-sm text-slate-700">
+                        投稿：<span className="font-semibold">{detailJob.applicantsMin != null && detailJob.applicantsMax != null ? `${detailJob.applicantsMin}–${detailJob.applicantsMax}` : "—"}</span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {detailJob.skills.map((s) => (
+                          <Badge key={s} variant="secondary" className="rounded-full">{s}</Badge>
+                        ))}
+                      </div>
+                      <Separator className="my-4" />
+                      <div className="flex flex-col gap-2">
+                        <Button
+                          className="rounded-2xl"
+                          onClick={() => toggleSave(detailJob.id)}
+                        >
+                          {savedIds.includes(detailJob.id) ? (
+                            <>
+                              <BookmarkCheck className="mr-2 h-4 w-4" /> 已收藏
+                            </>
+                          ) : (
+                            <>
+                              <Bookmark className="mr-2 h-4 w-4" /> 收藏
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="rounded-2xl"
+                          onClick={() => toggleHide(detailJob.id)}
+                        >
+                          <EyeOff className="mr-2 h-4 w-4" /> {hiddenIds.includes(detailJob.id) ? "已忽略" : "忽略"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="rounded-2xl"
+                          onClick={() => openSource(detailJob.url)}
+                        >
+                          <ExternalLink className="mr-2 h-4 w-4" /> 前往原站
+                        </Button>
+                        <Button variant="secondary" className="rounded-2xl">
+                          標記已投遞（示意）
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="rounded-2xl">
+                    <CardContent className="p-4 text-sm text-slate-700">
+                      <div className="font-semibold text-slate-900">備註</div>
+                      <div className="mt-1 text-slate-600">
+                        這是 UI Prototype：資料與分數皆為 mock。真實版會由 jobs/job_scores + API 填入。
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <footer className="border-t bg-white">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-6 text-xs text-slate-500">
+          <div>© MVP Prototype — Jobs Aggregator</div>
+          <div>Base Currency: TWD · Sources: Yourator + WWR</div>
+        </div>
+      </footer>
+    </div>
+  );
+}
