@@ -1,0 +1,75 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "rules/*.yml"
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Next.js Application
+  - job_name: 'fa-app'
+    static_configs:
+      - targets: ['app:3000']
+    scrape_interval: 30s
+    metrics_path: '/api/metrics'
+    
+  # Authentication Service
+  - job_name: 'fa-auth'
+    static_configs:
+      - targets: ['auth:4000']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # N8N Workflows
+  - job_name: 'fa-n8n'
+    static_configs:
+      - targets: ['n8n:5678']
+    scrape_interval: 60s
+    metrics_path: '/metrics'
+
+  # PostgreSQL Database
+  - job_name: 'fa-postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+
+  # Redis Cache
+  - job_name: 'fa-redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s
+
+  # MinIO Storage
+  - job_name: 'fa-minio'
+    static_configs:
+      - targets: ['minio:9000']
+    scrape_interval: 60s
+    metrics_path: '/minio/v2/metrics/cluster'
+
+  # Docker containers
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['docker-exporter:9323']
+    scrape_interval: 30s
+
+  # Node Exporter (System metrics)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+
+# Alerting rules
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Recording rules
+rule_files:
+  - "alert_rules.yml"

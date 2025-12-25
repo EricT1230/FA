@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: 'FA Dashboards'
+    orgId: 1
+    folder: 'Freelancer Aggregator'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

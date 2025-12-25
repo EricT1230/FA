@@ -1,0 +1,60 @@
+{
+  "name": "freelancer-aggregator",
+  "version": "1.0.0",
+  "description": "Complete freelance job aggregation and decision-making platform with CI/CD",
+  "private": true,
+  "workspaces": [
+    "decision-platform",
+    "decision-platform/services/*"
+  ],
+  "scripts": {
+    "prepare": "husky install",
+    "dev": "cd decision-platform && pnpm dev",
+    "build": "cd decision-platform && pnpm build",
+    "start": "cd decision-platform && pnpm start",
+    "test": "cd decision-platform && pnpm test",
+    "test:auth": "cd decision-platform/services/auth && pnpm test",
+    "test:all": "pnpm test && pnpm test:auth",
+    "lint": "cd decision-platform && pnpm lint",
+    "lint:fix": "cd decision-platform && pnpm lint",
+    "type-check": "cd decision-platform && pnpm type-check",
+    "security:audit": "pnpm audit --audit-level high",
+    "security:audit:all": "cd decision-platform && pnpm security:audit && cd services/auth && pnpm audit --audit-level high",
+    "docker:dev": "cd decision-platform && pnpm docker:dev",
+    "docker:staging": "cd decision-platform && pnpm docker:staging", 
+    "docker:prod": "cd decision-platform && pnpm docker:prod",
+    "docker:down": "cd decision-platform && pnpm docker:down",
+    "docker:clean": "cd decision-platform && pnpm docker:clean",
+    "ci:test": "pnpm lint && pnpm type-check && pnpm test:all",
+    "ci:build": "pnpm build",
+    "ci:security": "pnpm security:audit:all",
+    "deploy:staging": "pnpm ci:test && pnpm ci:build && pnpm docker:staging",
+    "deploy:production": "pnpm ci:test && pnpm ci:build && pnpm docker:prod",
+    "backup:db": "docker-compose exec db-primary pg_dump -U fa_user freelancer_aggregator > backup/$(date +%Y%m%d_%H%M%S)_db_backup.sql",
+    "restore:db": "docker-compose exec -T db-primary psql -U fa_user -d freelancer_aggregator",
+    "logs:app": "docker-compose logs -f app",
+    "logs:auth": "docker-compose logs -f auth", 
+    "logs:n8n": "docker-compose logs -f n8n",
+    "logs:all": "docker-compose logs -f",
+    "health:check": "curl -f http://localhost:3000/api/health && curl -f http://localhost:4000/health",
+    "setup:dev": "bash scripts/setup-dev.sh",
+    "clean": "pnpm docker:clean && rm -rf decision-platform/node_modules decision-platform/.next"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7"
+  },
+  "lint-staged": {
+    "decision-platform/src/**/*.{js,jsx,ts,tsx}": [
+      "cd decision-platform && pnpm lint:check",
+      "cd decision-platform && pnpm type-check"
+    ],
+    "decision-platform/services/auth/**/*.js": [
+      "cd decision-platform/services/auth && npm run lint"
+    ]
+  },
+  "engines": {
+    "node": ">=20.9.0",
+    "pnpm": ">=10.0.0"
+  }
+}

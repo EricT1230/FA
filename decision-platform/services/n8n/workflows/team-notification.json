@@ -1,0 +1,260 @@
+{
+  "name": "Team Notification Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "team-notification",
+        "options": {}
+      },
+      "id": "notification-webhook",
+      "name": "Team Notification Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "team-notification-webhook"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": "team_members",
+        "where": {
+          "conditions": [
+            {
+              "column": "team_id",
+              "condition": "equal",
+              "value": "={{ $json.teamId }}"
+            },
+            {
+              "column": "active",
+              "condition": "equal",
+              "value": "true"
+            }
+          ]
+        },
+        "sort": {
+          "rules": [
+            {
+              "column": "role",
+              "direction": "ASC"
+            }
+          ]
+        }
+      },
+      "id": "fetch-team-members",
+      "name": "Fetch Team Members",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": "users",
+        "where": {
+          "conditions": [
+            {
+              "column": "id",
+              "condition": "in",
+              "value": "={{ $json.map(member => member.user_id).join(',') }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-user-details",
+      "name": "Fetch User Details",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare notification data for each team member\nconst webhookData = $('Team Notification Webhook').first().json;\nconst teamMembers = $('Fetch Team Members').all();\nconst users = $('Fetch User Details').all();\n\nconst notifications = [];\n\n// Create user lookup map\nconst userMap = {};\nusers.forEach(user => {\n  userMap[user.json.id] = user.json;\n});\n\n// Process each team member\nteamMembers.forEach(member => {\n  const user = userMap[member.json.user_id];\n  if (!user) return;\n  \n  const notificationPrefs = user.notification_preferences || {};\n  \n  // Check if user wants this type of notification\n  const notificationType = webhookData.type;\n  let shouldNotify = true;\n  \n  switch (notificationType) {\n    case 'decision-made':\n      shouldNotify = notificationPrefs.teamDecisions !== false;\n      break;\n    case 'high-score-alert':\n      shouldNotify = notificationPrefs.realTimeAlerts !== false;\n      break;\n    case 'daily-digest':\n      shouldNotify = notificationPrefs.dailyDigest !== false;\n      break;\n  }\n  \n  if (shouldNotify) {\n    notifications.push({\n      userId: user.id,\n      userEmail: user.email,\n      userName: user.name,\n      userRole: member.json.role,\n      notificationType,\n      data: webhookData\n    });\n  }\n});\n\nreturn notifications.map(notification => ({ json: notification }));"
+      },
+      "id": "prepare-notifications",
+      "name": "Prepare Notifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "notifications",
+        "columns": "user_id, type, title, message, data"
+      },
+      "id": "save-notification",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "email-enabled-condition",
+              "leftValue": "={{ $json.userEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-email-enabled",
+      "name": "Check Email Enabled",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@freelanceraggregator.com",
+        "toEmail": "={{ $json.userEmail }}",
+        "subject": "={{ $json.data.title || 'Team Notification' }}",
+        "emailFormat": "html",
+        "html": "=<h2>{{ $json.data.title }}</h2><p>{{ $json.data.message }}</p><hr><p>這是來自接案彙總評分平台的自動通知。<br><a href='http://localhost:3000'>前往平台</a></p>"
+      },
+      "id": "send-email",
+      "name": "Send Email Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        500
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-main",
+          "name": "FA SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Team Notification Webhook": {
+      "main": [
+        [
+          {
+            "node": "Fetch Team Members",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Team Members": {
+      "main": [
+        [
+          {
+            "node": "Fetch User Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch User Details": {
+      "main": [
+        [
+          {
+            "node": "Prepare Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Notifications": {
+      "main": [
+        [
+          {
+            "node": "Save to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Database": {
+      "main": [
+        [
+          {
+            "node": "Check Email Enabled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Email Enabled": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Send Email Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "id": "team-notification",
+  "tags": [
+    "notification",
+    "team",
+    "email"
+  ]
+}

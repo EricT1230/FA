@@ -1,0 +1,244 @@
+{
+  "name": "Yourator Job Ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "f8b3c0a0-1234-5678-9abc-def012345678",
+      "name": "Schedule Every 5 Minutes",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.yourator.co/api/jobs?category=engineering&remote=true",
+        "options": {
+          "headers": {
+            "User-Agent": "FreelancerAggregator/1.0",
+            "Accept": "application/json"
+          }
+        }
+      },
+      "id": "a1b2c3d4-5678-9abc-def0-123456789abc",
+      "name": "Fetch Yourator Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        470,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and normalize Yourator job data\nconst jobs = $input.all();\nconst normalizedJobs = [];\n\nfor (const job of jobs) {\n  const data = job.json;\n  \n  // Extract job details\n  const normalizedJob = {\n    source: 'yourator',\n    externalId: data.id || `yourator-${Date.now()}-${Math.random()}`,\n    title: data.title || 'Untitled Job',\n    url: data.url || 'https://www.yourator.co/jobs',\n    postedAt: data.created_at || new Date().toISOString(),\n    category: data.category || 'Unknown',\n    skills: data.skills || [],\n    remote: data.remote || false,\n    company: data.company?.name || 'Unknown Company',\n    description: data.description || '',\n    salary: data.salary,\n    applicants: data.applicant_count,\n    requirements: data.requirements || [],\n    benefits: data.benefits || [],\n    rawData: data\n  };\n  \n  normalizedJobs.push(normalizedJob);\n}\n\nreturn normalizedJobs.map(job => ({ json: job }));"
+      },
+      "id": "b2c3d4e5-6789-abcd-ef01-23456789abcd",
+      "name": "Normalize Job Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        690,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "raw_jobs",
+        "columns": "source, external_id, title, url, posted_at, raw_data",
+        "additionalFields": {
+          "mode": "upsert",
+          "upsertKeyColumns": "source, external_id"
+        }
+      },
+      "id": "c3d4e5f6-789a-bcde-f012-3456789abcde",
+      "name": "Insert to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        910,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://app:3000/api/admin/trigger-scoring",
+        "options": {
+          "headers": {
+            "Authorization": "Bearer service-token",
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "source": "yourator",
+            "jobIds": "={{ $json.insertedIds }}"
+          }
+        }
+      },
+      "id": "d4e5f6g7-89ab-cdef-0123-456789abcdef",
+      "name": "Trigger Scoring Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1130,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "error-condition",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e5f6g7h8-9abc-def0-1234-56789abcdef0",
+      "name": "Check for Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1350,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://app:3000/api/admin/alert",
+        "options": {
+          "headers": {
+            "Authorization": "Bearer service-token",
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "type": "ingestion_error",
+            "message": "Yourator ingestion failed",
+            "error": "={{ $json.error }}",
+            "timestamp": "={{ new Date().toISOString() }}"
+          }
+        }
+      },
+      "id": "f6g7h8i9-abcd-ef01-2345-6789abcdef01",
+      "name": "Send Error Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1350,
+        500
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Yourator Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Yourator Jobs": {
+      "main": [
+        [
+          {
+            "node": "Normalize Job Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Job Data": {
+      "main": [
+        [
+          {
+            "node": "Insert to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert to Database": {
+      "main": [
+        [
+          {
+            "node": "Trigger Scoring Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Scoring Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Check for Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Errors": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Send Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "yourator-ingestion",
+  "tags": [
+    "ingestion",
+    "yourator",
+    "jobs"
+  ]
+}

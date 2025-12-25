@@ -1,0 +1,338 @@
+version: '3.8'
+
+services:
+  # ========================================
+  # Load Balancer / Reverse Proxy
+  # ========================================
+  nginx:
+    image: nginx:alpine
+    container_name: fa-nginx-prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - /var/log/nginx:/var/log/nginx
+    networks:
+      - fa-production
+    depends_on:
+      - app
+      - auth
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+  # ========================================
+  # Database Cluster
+  # ========================================
+  db-primary:
+    image: postgres:15-alpine
+    container_name: fa-postgres-primary
+    environment:
+      POSTGRES_DB: freelancer_aggregator
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_REPLICATION_MODE: master
+      POSTGRES_REPLICATION_USER: ${DB_REPLICATION_USER}
+      POSTGRES_REPLICATION_PASSWORD: ${DB_REPLICATION_PASSWORD}
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./services/db/init:/docker-entrypoint-initdb.d
+      - ./backup:/backup
+    networks:
+      - fa-production
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d freelancer_aggregator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cluster for High Availability
+  redis-primary:
+    image: redis:7-alpine
+    container_name: fa-redis-primary
+    volumes:
+      - redis_primary_data:/data
+      - ./redis/redis-prod.conf:/etc/redis/redis.conf
+    networks:
+      - fa-production
+    command: redis-server /etc/redis/redis.conf
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # MinIO High Performance Storage
+  minio:
+    image: minio/minio:latest
+    container_name: fa-minio-prod
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    volumes:
+      - minio_production_data:/data
+      - /var/log/minio:/var/log/minio
+    networks:
+      - fa-production
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ========================================
+  # Application Services
+  # ========================================
+  app:
+    image: ghcr.io/ericT1230/fa-app:${IMAGE_TAG:-latest}
+    container_name: fa-app-prod
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db-primary:5432/freelancer_aggregator
+      - REDIS_URL=redis://redis-primary:6379
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXTAUTH_URL=https://${PRODUCTION_DOMAIN}
+      - N8N_WEBHOOK_URL=http://n8n:5678
+      - LOG_LEVEL=warn
+      - TELEMETRY_ENABLED=true
+      - SENTRY_DSN=${SENTRY_DSN}
+      
+    networks:
+      - fa-production
+    depends_on:
+      db-primary:
+        condition: service_healthy
+      redis-primary:
+        condition: service_healthy
+      n8n:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      replicas: 3  # Scale horizontally
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Authentication Service
+  auth:
+    image: ghcr.io/ericT1230/fa-auth:${IMAGE_TAG:-latest}
+    container_name: fa-auth-prod
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db-primary:5432/freelancer_aggregator
+      - REDIS_URL=redis://redis-primary:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - FRONTEND_URL=https://${PRODUCTION_DOMAIN}
+      - CORS_ORIGINS=https://${PRODUCTION_DOMAIN}
+      - LOG_LEVEL=warn
+      - SENTRY_DSN=${SENTRY_DSN}
+      
+    networks:
+      - fa-production
+    depends_on:
+      db-primary:
+        condition: service_healthy
+      redis-primary:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      replicas: 2  # Scale for availability
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # N8N Workflow Automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: fa-n8n-prod
+    environment:
+      - NODE_ENV=production
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      - N8N_HOST=${PRODUCTION_DOMAIN}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - WEBHOOK_URL=https://${PRODUCTION_DOMAIN}
+      - GENERIC_TIMEZONE=Asia/Taipei
+      
+      # Database configuration
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=db-primary
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=freelancer_aggregator
+      - DB_POSTGRESDB_USER=${DB_USER}
+      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD}
+      - DB_POSTGRESDB_SCHEMA=n8n
+      
+      # Redis configuration
+      - QUEUE_BULL_REDIS_HOST=redis-primary
+      - QUEUE_BULL_REDIS_PORT=6379
+      - N8N_REDIS_HOST=redis-primary
+      - N8N_REDIS_PORT=6379
+      
+      # Security and encryption
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_SECURE_COOKIE=true
+      - N8N_DISABLE_UI=${N8N_DISABLE_UI:-false}
+      
+      # Performance and monitoring
+      - N8N_LOG_LEVEL=warn
+      - N8N_METRICS=true
+      - N8N_PROMETHEUS_ENABLED=true
+      
+    volumes:
+      - n8n_production_data:/home/node/.n8n
+      - ./services/n8n/workflows:/home/node/.n8n/workflows
+      - ./services/n8n/credentials:/home/node/.n8n/credentials
+      - /var/log/n8n:/home/node/.n8n/logs
+    networks:
+      - fa-production
+    depends_on:
+      db-primary:
+        condition: service_healthy
+      redis-primary:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+
+  # ========================================
+  # Monitoring & Observability
+  # ========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: fa-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - fa-production
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: fa-grafana
+    ports:
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - fa-production
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Log aggregation
+  loki:
+    image: grafana/loki:latest
+    container_name: fa-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    networks:
+      - fa-production
+    restart: unless-stopped
+
+volumes:
+  postgres_primary_data:
+  redis_primary_data:
+  minio_production_data:
+  n8n_production_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+
+networks:
+  fa-production:
+    driver: bridge
+    labels:
+      - "environment=production"
+      - "project=freelancer-aggregator"

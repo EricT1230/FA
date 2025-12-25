@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: fa-postgres
+    environment:
+      POSTGRES_DB: freelancer_aggregator
+      POSTGRES_USER: fa_user
+      POSTGRES_PASSWORD: fa_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./services/db/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - fa-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fa_user -d freelancer_aggregator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Queue, Cache, Rate Limiting
+  redis:
+    image: redis:7-alpine
+    container_name: fa-redis
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - fa-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # MinIO for File Storage
+  minio:
+    image: minio/minio:latest
+    container_name: fa-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - fa-network
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # N8N Workflow Automation Service
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: fa-n8n
+    ports:
+      - "15678:5678"
+    environment:
+      - N8N_USER_MANAGEMENT_DISABLED=true
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=admin123
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:15678
+      - GENERIC_TIMEZONE=Asia/Taipei
+      - N8N_DISABLE_UI=false
+      
+      # Database configuration
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=db
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=freelancer_aggregator
+      - DB_POSTGRESDB_USER=fa_user
+      - DB_POSTGRESDB_PASSWORD=fa_password
+      - DB_POSTGRESDB_SCHEMA=n8n
+      
+      # Redis configuration
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - N8N_REDIS_HOST=redis
+      - N8N_REDIS_PORT=6379
+      
+      # Encryption key
+      - N8N_ENCRYPTION_KEY=your-n8n-encryption-key-change-in-production
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./services/n8n/workflows:/home/node/.n8n/workflows
+      - ./services/n8n/credentials:/home/node/.n8n/credentials
+    networks:
+      - fa-network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  n8n_data:
+
+networks:
+  fa-network:
+    driver: bridge

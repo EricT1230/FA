@@ -1,0 +1,64 @@
+{
+  "database": {
+    "type": "postgresdb",
+    "postgresdb": {
+      "host": "db",
+      "port": 5432,
+      "database": "freelancer_aggregator",
+      "user": "fa_user",
+      "password": "fa_password",
+      "schema": "n8n"
+    }
+  },
+  "cache": {
+    "backend": "redis",
+    "redis": {
+      "host": "redis",
+      "port": 6379
+    }
+  },
+  "executions": {
+    "mode": "queue",
+    "timeout": 3600,
+    "maxTimeout": 3600,
+    "saveDataOnError": "all",
+    "saveDataOnSuccess": "all",
+    "saveDataManualExecutions": false,
+    "pruneData": true,
+    "pruneDataMaxAge": 336,
+    "pruneDataTimeout": 3600
+  },
+  "userManagement": {
+    "disabled": false,
+    "jwtSecret": "your-n8n-jwt-secret"
+  },
+  "publicApi": {
+    "disabled": false,
+    "path": "api",
+    "swaggerUi": {
+      "disabled": false
+    }
+  },
+  "security": {
+    "basicAuth": {
+      "active": true,
+      "user": "admin",
+      "password": "admin123"
+    }
+  },
+  "endpoints": {
+    "rest": "rest",
+    "webhook": "webhook",
+    "webhookWaiting": "webhook-waiting",
+    "webhookTest": "webhook-test"
+  },
+  "logs": {
+    "level": "info",
+    "output": ["console", "file"],
+    "file": {
+      "filePath": "logs/n8n.log",
+      "maxFiles": 5,
+      "maxsize": "16m"
+    }
+  }
+}

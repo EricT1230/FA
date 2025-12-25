@@ -1,0 +1,3 @@
+packages:
+  - 'decision-platform'
+  - 'decision-platform/services/*'

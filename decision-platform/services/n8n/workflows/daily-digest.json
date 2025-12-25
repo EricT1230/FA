@@ -1,0 +1,330 @@
+{
+  "name": "Daily Job Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hour",
+              "hoursInterval": 1
+            }
+          ]
+        },
+        "timezone": "Asia/Taipei"
+      },
+      "id": "daily-schedule",
+      "name": "Daily at 9:00 AM",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": "jobs",
+        "where": {
+          "conditions": [
+            {
+              "column": "created_at",
+              "condition": "dateAfter",
+              "value": "={{ new Date(Date.now() - 24*60*60*1000).toISOString() }}"
+            },
+            {
+              "column": "score",
+              "condition": "gte",
+              "value": "70"
+            }
+          ]
+        },
+        "sort": {
+          "rules": [
+            {
+              "column": "score",
+              "direction": "DESC"
+            },
+            {
+              "column": "created_at",
+              "direction": "DESC"
+            }
+          ]
+        },
+        "limit": 10
+      },
+      "id": "fetch-top-jobs",
+      "name": "Fetch Top Jobs (Last 24h)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-jobs-condition",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-has-jobs",
+      "name": "Check Has New Jobs",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": "teams",
+        "where": {
+          "conditions": []
+        }
+      },
+      "id": "fetch-all-teams",
+      "name": "Fetch All Active Teams",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        680,
+        500
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate daily digest for each team\nconst topJobs = $('Fetch Top Jobs (Last 24h)').all();\nconst teams = $('Fetch All Active Teams').all();\n\nconst digests = [];\n\nteams.forEach(team => {\n  const teamData = team.json;\n  const teamSettings = teamData.settings || {};\n  \n  // Filter jobs based on team preferences\n  const relevantJobs = topJobs.filter(jobItem => {\n    const job = jobItem.json;\n    \n    // Apply team filters\n    if (job.score < (teamSettings.minScore || 70)) return false;\n    if (teamSettings.preferRemote && !job.remote) return false;\n    \n    const avgApplicants = job.applicants_min && job.applicants_max \n      ? (job.applicants_min + job.applicants_max) / 2 \n      : null;\n    if (avgApplicants && avgApplicants > (teamSettings.maxApplicants || 20)) return false;\n    \n    return true;\n  });\n  \n  if (relevantJobs.length > 0) {\n    const digestData = {\n      teamId: teamData.id,\n      teamName: teamData.name,\n      jobCount: relevantJobs.length,\n      topJobs: relevantJobs.slice(0, 5).map(jobItem => ({\n        id: jobItem.json.id,\n        title: jobItem.json.title,\n        score: jobItem.json.score,\n        ehrTwd: jobItem.json.ehr_twd,\n        remote: jobItem.json.remote,\n        category: jobItem.json.category,\n        url: jobItem.json.url\n      })),\n      generatedAt: new Date().toISOString()\n    };\n    \n    digests.push(digestData);\n  }\n});\n\nreturn digests.map(digest => ({ json: digest }));"
+      },
+      "id": "generate-digest",
+      "name": "Generate Team Digests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": "team_members",
+        "where": {
+          "conditions": [
+            {
+              "column": "team_id",
+              "condition": "equal",
+              "value": "={{ $json.teamId }}"
+            },
+            {
+              "column": "active",
+              "condition": "equal",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "id": "fetch-team-users",
+      "name": "Fetch Team Users",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        500
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": "users",
+        "where": {
+          "conditions": [
+            {
+              "column": "id",
+              "condition": "in",
+              "value": "={{ $json.map(member => member.user_id).join(',') }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-user-emails",
+      "name": "Fetch User Email Preferences",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        500
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "digest@freelanceraggregator.com",
+        "toEmail": "={{ $json.email }}",
+        "subject": "=每日工作摘要 - {{ $('Generate Team Digests').first().json.teamName }}",
+        "emailFormat": "html",
+        "html": "=<h2>🌟 今日推薦工作 ({{ $('Generate Team Digests').first().json.jobCount }} 個)</h2>\n\n{% for job in $('Generate Team Digests').first().json.topJobs %}\n<div style='border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 12px 0;'>\n  <h3 style='margin: 0 0 8px 0; color: #1f2937;'>{{ job.title }}</h3>\n  <div style='display: flex; gap: 12px; margin: 8px 0;'>\n    <span style='background: #f3f4f6; padding: 4px 8px; border-radius: 4px; font-size: 12px;'>評分: <strong>{{ job.score }}</strong></span>\n    <span style='background: #f3f4f6; padding: 4px 8px; border-radius: 4px; font-size: 12px;'>{{ job.category }}</span>\n    {% if job.remote %}\n    <span style='background: #dcfce7; color: #166534; padding: 4px 8px; border-radius: 4px; font-size: 12px;'>遠端</span>\n    {% endif %}\n  </div>\n  {% if job.ehrTwd %}\n  <div style='color: #6b7280; font-size: 14px;'>時薪: {{ job.ehrTwd }} TWD/hr</div>\n  {% endif %}\n  <div style='margin-top: 8px;'>\n    <a href='{{ job.url }}' style='color: #2563eb; text-decoration: none;'>查看詳情 →</a>\n  </div>\n</div>\n{% endfor %}\n\n<hr style='margin: 24px 0;'>\n<p style='color: #6b7280; font-size: 12px;'>\n  這是來自接案彙總評分平台的每日摘要。<br>\n  <a href='http://localhost:3000'>前往平台查看更多</a> | \n  <a href='http://localhost:3000/settings/notifications'>修改通知設定</a>\n</p>"
+      },
+      "id": "send-digest-email",
+      "name": "Send Digest Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        700
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-main",
+          "name": "FA SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily at 9:00 AM": {
+      "main": [
+        [
+          {
+            "node": "Fetch Top Jobs (Last 24h)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Top Jobs (Last 24h)": {
+      "main": [
+        [
+          {
+            "node": "Check Has New Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Has New Jobs": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Fetch All Active Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch All Active Teams": {
+      "main": [
+        [
+          {
+            "node": "Generate Team Digests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Team Digests": {
+      "main": [
+        [
+          {
+            "node": "Fetch Team Users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Team Users": {
+      "main": [
+        [
+          {
+            "node": "Fetch User Email Preferences",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch User Email Preferences": {
+      "main": [
+        [
+          {
+            "node": "Check Email Enabled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Email Enabled": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Send Digest Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "id": "daily-digest",
+  "tags": [
+    "digest",
+    "daily",
+    "email",
+    "schedule"
+  ]
+}

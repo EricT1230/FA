@@ -1,0 +1,221 @@
+{
+  "name": "Risk Assessment Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "risk-assessment",
+        "options": {}
+      },
+      "id": "webhook-risk-trigger",
+      "name": "Risk Assessment Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "risk-assessment-webhook"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": "jobs",
+        "where": {
+          "conditions": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $json.jobId }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-job-data",
+      "name": "Fetch Job Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Risk Assessment Algorithm\nconst job = $input.first().json;\n\nconst factors = [];\nlet riskScore = 0;\nlet gateStatus = 'PASS';\n\n// Payment Risk Assessment\nfunction evaluatePaymentRisk(job) {\n  let score = 0;\n  let severity = 'LOW';\n  const indicators = [];\n  \n  if (job.ehr_twd && job.ehr_twd < 800) {\n    score += 30;\n    severity = 'HIGH';\n    indicators.push('Extremely low hourly rate (<800 TWD/hr)');\n  } else if (job.ehr_twd && job.ehr_twd < 1000) {\n    score += 15;\n    severity = 'MEDIUM';\n    indicators.push('Low hourly rate (<1000 TWD/hr)');\n  }\n  \n  if (!job.source_key || job.source_key === 'unknown') {\n    score += 20;\n    severity = severity === 'HIGH' ? 'HIGH' : 'MEDIUM';\n    indicators.push('Unknown or unreliable job source');\n  }\n  \n  return {\n    category: 'PAYMENT_RISK',\n    score,\n    severity,\n    indicators,\n    description: 'Risk of payment delays or disputes'\n  };\n}\n\n// Technical Risk Assessment\nfunction evaluateTechnicalRisk(job) {\n  let score = 0;\n  let severity = 'LOW';\n  const indicators = [];\n  \n  const skills = job.skills || [];\n  const title = job.title.toLowerCase();\n  \n  const complexTechs = ['kubernetes', 'microservices', 'blockchain', 'ai', 'machine learning'];\n  const hasComplexTech = complexTechs.some(tech => \n    title.includes(tech) || skills.some(skill => skill.toLowerCase().includes(tech))\n  );\n  \n  if (hasComplexTech) {\n    score += 25;\n    severity = 'MEDIUM';\n    indicators.push('Complex technology requirements detected');\n  }\n  \n  if (skills.length > 10) {\n    score += 20;\n    severity = severity === 'MEDIUM' ? 'HIGH' : 'MEDIUM';\n    indicators.push(`Excessive skill requirements (${skills.length} skills listed)`);\n  }\n  \n  const vagueTerms = ['various', 'multiple', 'different', 'any'];\n  if (vagueTerms.some(term => title.includes(term))) {\n    score += 15;\n    indicators.push('Vague technical requirements');\n  }\n  \n  return {\n    category: 'TECHNICAL_RISK',\n    score,\n    severity,\n    indicators,\n    description: 'Risk of technical complexity exceeding expectations'\n  };\n}\n\n// Timeline Risk Assessment\nfunction evaluateTimelineRisk(job) {\n  let score = 0;\n  let severity = 'LOW';\n  const indicators = [];\n  \n  const title = job.title.toLowerCase();\n  const urgentKeywords = ['urgent', 'asap', 'immediately', 'rush', 'emergency'];\n  \n  if (urgentKeywords.some(keyword => title.includes(keyword))) {\n    score += 35;\n    severity = 'HIGH';\n    indicators.push('Urgent timeline requirements detected');\n  }\n  \n  const postedAt = new Date(job.posted_at);\n  const daysSincePosted = (Date.now() - postedAt.getTime()) / (1000 * 60 * 60 * 24);\n  \n  if (daysSincePosted > 30) {\n    score += 20;\n    severity = severity === 'HIGH' ? 'HIGH' : 'MEDIUM';\n    indicators.push(`Job posted ${Math.round(daysSincePosted)} days ago`);\n  }\n  \n  return {\n    category: 'TIMELINE_RISK',\n    score,\n    severity,\n    indicators,\n    description: 'Risk of unrealistic or tight deadlines'\n  };\n}\n\n// Communication Risk Assessment\nfunction evaluateCommunicationRisk(job) {\n  let score = 0;\n  let severity = 'LOW';\n  const indicators = [];\n  \n  const title = job.title;\n  \n  if (title.length < 10) {\n    score += 20;\n    severity = 'MEDIUM';\n    indicators.push('Very short job title');\n  }\n  \n  if (title === title.toUpperCase() && title.length > 5) {\n    score += 15;\n    indicators.push('ALL CAPS title detected');\n  }\n  \n  const suspiciousTerms = ['test project', 'pay first', 'no experience required'];\n  if (suspiciousTerms.some(term => title.toLowerCase().includes(term))) {\n    score += 40;\n    severity = 'CRITICAL';\n    indicators.push('Suspicious terms detected in title');\n  }\n  \n  return {\n    category: 'COMMUNICATION_RISK',\n    score,\n    severity,\n    indicators,\n    description: 'Risk of poor client communication or fraud'\n  };\n}\n\n// Competition Risk Assessment\nfunction evaluateCompetitionRisk(job) {\n  let score = 0;\n  let severity = 'LOW';\n  const indicators = [];\n  \n  if (job.applicants_min && job.applicants_max) {\n    const avgApplicants = (job.applicants_min + job.applicants_max) / 2;\n    \n    if (avgApplicants > 50) {\n      score += 30;\n      severity = 'HIGH';\n      indicators.push(`Very high competition (${avgApplicants} applicants)`);\n    } else if (avgApplicants > 25) {\n      score += 20;\n      severity = 'MEDIUM';\n      indicators.push(`High competition (${avgApplicants} applicants)`);\n    }\n  }\n  \n  return {\n    category: 'COMPETITION_RISK',\n    score,\n    severity,\n    indicators,\n    description: 'Risk due to high competition levels'\n  };\n}\n\n// Run all risk assessments\nfactors.push(evaluatePaymentRisk(job));\nfactors.push(evaluateTechnicalRisk(job));\nfactors.push(evaluateTimelineRisk(job));\nfactors.push(evaluateCommunicationRisk(job));\nfactors.push(evaluateCompetitionRisk(job));\n\n// Calculate total risk score\nriskScore = factors.reduce((sum, factor) => sum + factor.score, 0);\n\n// Determine gate status\nconst criticalFactors = factors.filter(f => f.severity === 'CRITICAL');\nconst highFactors = factors.filter(f => f.severity === 'HIGH');\n\nif (criticalFactors.length > 0 || riskScore > 80) {\n  gateStatus = 'HARD_BLOCK';\n} else if (highFactors.length >= 2 || riskScore > 60) {\n  gateStatus = 'SOFT_WARNING';\n}\n\n// Generate recommendations\nconst recommendations = [];\n\nif (gateStatus === 'HARD_BLOCK') {\n  recommendations.push('❌ NOT RECOMMENDED: Critical risk factors detected');\n} else if (gateStatus === 'SOFT_WARNING') {\n  recommendations.push('⚠️ PROCEED WITH CAUTION: Multiple risk factors detected');\n} else {\n  recommendations.push('✅ LOW RISK: Suitable for application');\n}\n\nfactors.forEach(factor => {\n  if (factor.severity === 'CRITICAL' || factor.severity === 'HIGH') {\n    switch (factor.category) {\n      case 'PAYMENT_RISK':\n        recommendations.push('💰 Request upfront payment');\n        break;\n      case 'TECHNICAL_RISK':\n        recommendations.push('🔧 Clarify technical requirements');\n        break;\n      case 'TIMELINE_RISK':\n        recommendations.push('⏰ Negotiate realistic deadlines');\n        break;\n      case 'COMMUNICATION_RISK':\n        recommendations.push('💬 Establish clear communication');\n        break;\n      case 'COMPETITION_RISK':\n        recommendations.push('🎯 Differentiate your proposal');\n        break;\n    }\n  }\n});\n\nreturn [{\n  json: {\n    jobId: job.id,\n    gateStatus,\n    riskScore,\n    factors,\n    recommendations\n  }\n}];"
+      },
+      "id": "risk-algorithm",
+      "name": "Risk Assessment Algorithm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "job_risk_assessments",
+        "columns": "job_id, gate_status, risk_score, factors, recommendations",
+        "additionalFields": {
+          "mode": "upsert",
+          "upsertKeyColumns": "job_id"
+        }
+      },
+      "id": "save-risk-assessment",
+      "name": "Save Risk Assessment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "high-score-condition",
+              "leftValue": "={{ $json.score }}",
+              "rightValue": "80",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "id": "low-risk-condition",
+              "leftValue": "={{ $json.gateStatus }}",
+              "rightValue": "HARD_BLOCK",
+              "operator": {
+                "type": "string",
+                "operation": "notEqual"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-alert-conditions",
+      "name": "Check Alert Conditions",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/high-score-alert",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "jobId": "={{ $json.jobId }}",
+            "score": "={{ $json.score }}",
+            "gateStatus": "={{ $json.gateStatus }}",
+            "trigger": "High score + low risk detected"
+          }
+        }
+      },
+      "id": "trigger-alert",
+      "name": "Trigger High Score Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1120,
+        500
+      ]
+    }
+  ],
+  "connections": {
+    "Risk Assessment Webhook": {
+      "main": [
+        [
+          {
+            "node": "Fetch Job Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Job Data": {
+      "main": [
+        [
+          {
+            "node": "Risk Assessment Algorithm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk Assessment Algorithm": {
+      "main": [
+        [
+          {
+            "node": "Save Risk Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Risk Assessment": {
+      "main": [
+        [
+          {
+            "node": "Check Alert Conditions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Alert Conditions": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Trigger High Score Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "id": "risk-assessment",
+  "tags": [
+    "risk",
+    "assessment",
+    "automation"
+  ]
+}

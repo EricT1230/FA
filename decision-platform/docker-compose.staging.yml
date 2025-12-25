@@ -1,0 +1,221 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: fa-postgres-staging
+    environment:
+      POSTGRES_DB: freelancer_aggregator_staging
+      POSTGRES_USER: ${DB_USER:-fa_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+      - ./services/db/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5433:5432"  # Different port for staging
+    networks:
+      - fa-staging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fa_user} -d freelancer_aggregator_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Queue, Cache, Rate Limiting
+  redis:
+    image: redis:7-alpine
+    container_name: fa-redis-staging
+    ports:
+      - "16380:6379"  # Different port for staging
+    volumes:
+      - redis_staging_data:/data
+      - ./redis.conf:/etc/redis/redis.conf
+    networks:
+      - fa-staging
+    command: redis-server /etc/redis/redis.conf --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # MinIO for File Storage
+  minio:
+    image: minio/minio:latest
+    container_name: fa-minio-staging
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    ports:
+      - "9010:9000"   # Different ports for staging
+      - "9011:9001"
+    volumes:
+      - minio_staging_data:/data
+    networks:
+      - fa-staging
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # N8N Workflow Automation Service
+  n8n:
+    image: ghcr.io/ericT1230/fa-n8n:${IMAGE_TAG:-latest}
+    container_name: fa-n8n-staging
+    ports:
+      - "15679:5678"  # Different port for staging
+    environment:
+      - NODE_ENV=staging
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      - N8N_HOST=${STAGING_DOMAIN:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - WEBHOOK_URL=https://${STAGING_DOMAIN:-localhost}:15679
+      - GENERIC_TIMEZONE=Asia/Taipei
+      
+      # Database configuration
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=db
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=freelancer_aggregator_staging
+      - DB_POSTGRESDB_USER=${DB_USER:-fa_user}
+      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD}
+      - DB_POSTGRESDB_SCHEMA=n8n
+      
+      # Redis configuration
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - N8N_REDIS_HOST=redis
+      - N8N_REDIS_PORT=6379
+      
+      # Encryption and security
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_SECURE_COOKIE=${N8N_SECURE_COOKIE:-true}
+      
+      # Logging
+      - N8N_LOG_LEVEL=info
+      - N8N_LOG_OUTPUT=file,console
+      
+    volumes:
+      - n8n_staging_data:/home/node/.n8n
+      - ./services/n8n/workflows:/home/node/.n8n/workflows
+      - ./services/n8n/credentials:/home/node/.n8n/credentials
+      - /var/log/n8n:/home/node/.n8n/logs
+    networks:
+      - fa-staging
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Next.js Application
+  app:
+    image: ghcr.io/ericT1230/fa-app:${IMAGE_TAG:-latest}
+    container_name: fa-app-staging
+    ports:
+      - "3001:3000"  # Different port for staging
+    environment:
+      - NODE_ENV=staging
+      - DATABASE_URL=postgresql://${DB_USER:-fa_user}:${DB_PASSWORD}@db:5432/freelancer_aggregator_staging
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXTAUTH_URL=https://${STAGING_DOMAIN:-localhost}:3001
+      - N8N_WEBHOOK_URL=http://n8n:5678
+      - LOG_LEVEL=info
+      
+    networks:
+      - fa-staging
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      n8n:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Authentication Service
+  auth:
+    image: ghcr.io/ericT1230/fa-auth:${IMAGE_TAG:-latest}
+    container_name: fa-auth-staging
+    ports:
+      - "4001:4000"  # Different port for staging
+    environment:
+      - NODE_ENV=staging
+      - DATABASE_URL=postgresql://${DB_USER:-fa_user}:${DB_PASSWORD}@db:5432/freelancer_aggregator_staging
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - FRONTEND_URL=https://${STAGING_DOMAIN:-localhost}:3001
+      - CORS_ORIGINS=https://${STAGING_DOMAIN:-localhost}:3001
+      - LOG_LEVEL=info
+      
+    networks:
+      - fa-staging
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_staging_data:
+  redis_staging_data:
+  minio_staging_data:
+  n8n_staging_data:
+
+networks:
+  fa-staging:
+    driver: bridge
+    labels:
+      - "environment=staging"
+      - "project=freelancer-aggregator"

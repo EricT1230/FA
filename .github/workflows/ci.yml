@@ -1,0 +1,202 @@
+name: 🔄 Continuous Integration
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  NODE_VERSION: '20.x'
+  PNPM_VERSION: '10.x'
+
+jobs:
+  # ========================================
+  # Code Quality & Security
+  # ========================================
+  code-quality:
+    name: 🔍 Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🏗️ Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        
+    - name: 📦 Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ env.PNPM_VERSION }}
+        
+    - name: 📂 Get pnpm store directory
+      shell: bash
+      run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+      
+    - name: 🗂️ Setup pnpm cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.STORE_PATH }}
+        key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-store-
+
+    - name: 🔧 Install dependencies
+      working-directory: ./decision-platform
+      run: pnpm install --frozen-lockfile
+
+    - name: 🔍 ESLint check
+      working-directory: ./decision-platform
+      run: pnpm lint
+      
+    - name: 🏗️ Type check
+      working-directory: ./decision-platform
+      run: pnpm run build --dry-run || pnpm tsc --noEmit
+
+    - name: 🔒 Security audit
+      working-directory: ./decision-platform
+      run: pnpm audit --audit-level high
+
+  # ========================================
+  # Testing
+  # ========================================
+  test:
+    name: 🧪 Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: test_freelancer_aggregator
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🏗️ Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        
+    - name: 📦 Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ env.PNPM_VERSION }}
+
+    - name: 🔧 Install dependencies - Auth Service
+      working-directory: ./decision-platform/services/auth
+      run: pnpm install --frozen-lockfile
+
+    - name: 🧪 Run Auth Service tests
+      working-directory: ./decision-platform/services/auth
+      run: pnpm test
+      env:
+        DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_freelancer_aggregator
+        REDIS_URL: redis://localhost:6379
+        JWT_SECRET: test-jwt-secret
+        SESSION_SECRET: test-session-secret
+
+    - name: 🔧 Install dependencies - Main App
+      working-directory: ./decision-platform
+      run: pnpm install --frozen-lockfile
+
+    - name: 🏗️ Build Next.js app
+      working-directory: ./decision-platform
+      run: pnpm build
+      env:
+        DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_freelancer_aggregator
+        REDIS_URL: redis://localhost:6379
+
+    - name: 📊 Upload coverage reports
+      uses: codecov/codecov-action@v5
+      if: always()
+      with:
+        directory: ./decision-platform/coverage
+        flags: unittests
+        name: codecov-umbrella
+
+  # ========================================
+  # Docker Build Test
+  # ========================================
+  docker-build:
+    name: 🐳 Docker Build
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: [app, auth]
+        
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🏗️ Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: 🐳 Build Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: ./decision-platform${{ matrix.service == 'app' && '' || format('/services/{0}', matrix.service) }}
+        file: ./decision-platform${{ matrix.service == 'app' && '/Dockerfile' || format('/services/{0}/Dockerfile', matrix.service) }}
+        platforms: linux/amd64
+        push: false
+        tags: fa-${{ matrix.service }}:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # ========================================
+  # Security Scanning
+  # ========================================
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🔍 Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: 📤 Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: 🔐 Run Snyk to check for vulnerabilities
+      uses: snyk/actions/node@master
+      continue-on-error: true
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high
+        command: test

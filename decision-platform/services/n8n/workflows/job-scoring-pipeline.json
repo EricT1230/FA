@@ -1,0 +1,205 @@
+{
+  "name": "Job Scoring Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "score-job",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "score-job-webhook"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": "raw_jobs",
+        "where": {
+          "conditions": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $json.jobId }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-raw-job",
+      "name": "Fetch Raw Job Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Job Scoring Algorithm\nconst rawJob = $input.first().json;\nconst rawData = rawJob.raw_data;\n\n// Helper functions\nfunction clamp01(x) {\n  return Math.max(0, Math.min(1, x));\n}\n\nfunction calculateEHR(salary, source) {\n  if (!salary) return null;\n  \n  // Simple salary parsing (in real implementation would be more sophisticated)\n  const match = salary.match(/\\$?([0-9,]+)/);\n  if (match) {\n    const amount = parseInt(match[1].replace(/,/g, ''));\n    // Assume yearly salary, convert to hourly TWD (1 USD = 31 TWD)\n    return Math.round((amount / 2080) * 31); // 2080 work hours per year\n  }\n  \n  // Default based on source\n  return source === 'yourator' ? 1200 : 1500;\n}\n\n// Extract normalized data\nconst normalizedJob = {\n  sourceKey: rawJob.source,\n  title: rawJob.title,\n  url: rawJob.url,\n  postedAt: rawJob.posted_at,\n  category: rawData.category || 'Unknown',\n  skills: Array.isArray(rawData.skills) ? rawData.skills : [],\n  remote: Boolean(rawData.remote),\n  applicantsMin: rawData.applicants ? parseInt(rawData.applicants.split('-')[0]) : null,\n  applicantsMax: rawData.applicants ? parseInt(rawData.applicants.split('-')[1] || rawData.applicants.split('-')[0]) : null,\n  ehrTwd: calculateEHR(rawData.salary, rawJob.source),\n  fxAsOf: new Date().toISOString()\n};\n\n// Calculate score breakdown\nconst breakdown = {\n  P: 0, // Reward\n  Fit: 0, // Skill fit\n  Q: 0, // Quality\n  R: 0, // Risk\n  Comp: 0 // Competition\n};\n\n// Reward score (based on EHR)\nif (normalizedJob.ehrTwd) {\n  if (normalizedJob.ehrTwd > 2000) breakdown.P = 0.9;\n  else if (normalizedJob.ehrTwd > 1500) breakdown.P = 0.7;\n  else if (normalizedJob.ehrTwd > 1200) breakdown.P = 0.5;\n  else breakdown.P = 0.3;\n} else {\n  breakdown.P = 0.4;\n}\n\n// Skill fit (based on popular skills)\nconst popularSkills = ['React', 'Next.js', 'TypeScript', 'Node.js', 'Python'];\nconst matchingSkills = normalizedJob.skills.filter(skill => \n  popularSkills.some(popular => skill.toLowerCase().includes(popular.toLowerCase()))\n);\nbreakdown.Fit = Math.min(matchingSkills.length / 3, 1) * 0.8 + 0.2;\n\n// Quality (based on job title and description)\nbreakdown.Q = normalizedJob.title.length > 20 ? 0.7 : 0.5;\nif (rawData.description && rawData.description.length > 100) {\n  breakdown.Q = Math.min(breakdown.Q + 0.2, 1);\n}\n\n// Risk (lower is better)\nbreakdown.R = normalizedJob.remote ? 0.2 : 0.4;\nif (normalizedJob.title.toLowerCase().includes('urgent')) breakdown.R += 0.3;\nif (normalizedJob.ehrTwd && normalizedJob.ehrTwd < 800) breakdown.R += 0.4;\n\n// Competition (lower is better)\nif (normalizedJob.applicantsMin && normalizedJob.applicantsMax) {\n  const avgApplicants = (normalizedJob.applicantsMin + normalizedJob.applicantsMax) / 2;\n  if (avgApplicants < 10) breakdown.Comp = 0.2;\n  else if (avgApplicants < 25) breakdown.Comp = 0.5;\n  else breakdown.Comp = 0.8;\n} else {\n  breakdown.Comp = normalizedJob.sourceKey === 'wwr' ? 0.5 : 0.4;\n}\n\n// Calculate total score\nconst weights = { P: 0.3, Fit: 0.25, Q: 0.15, R: 0.15, Comp: 0.15 };\nconst totalScore = Math.round(\n  (breakdown.P * weights.P + \n   breakdown.Fit * weights.Fit + \n   breakdown.Q * weights.Q + \n   (1 - breakdown.R) * weights.R + \n   (1 - breakdown.Comp) * weights.Comp) * 100\n);\n\n// Generate reasons\nconst reasonsTop = [];\nconst reasonsPositive = [];\nconst reasonsNegative = [];\n\nif (breakdown.P > 0.7) {\n  reasonsTop.push('有效時薪高於同類別 p75');\n  reasonsPositive.push('有效時薪顯著高於同類別 p75');\n}\n\nif (breakdown.Fit > 0.6) {\n  reasonsTop.push(`技能命中：${matchingSkills.slice(0, 2).join('/')}`);\n  reasonsPositive.push('技能匹配度高');\n}\n\nif (normalizedJob.remote) {\n  reasonsPositive.push('可遠端工作');\n} else {\n  reasonsNegative.push('遠端限制（偏現場/混合）');\n}\n\nif (breakdown.Comp > 0.6) {\n  reasonsNegative.push('競爭較高');\n  reasonsTop.push('競爭偏高');\n} else if (breakdown.Comp < 0.4) {\n  reasonsTop.push('競爭低');\n}\n\n// Return scored job data\nreturn [{\n  json: {\n    rawJobId: rawJob.id,\n    ...normalizedJob,\n    score: totalScore,\n    breakdown,\n    reasonsTop,\n    reasonsPositive,\n    reasonsNegative\n  }\n}];"
+      },
+      "id": "scoring-algorithm",
+      "name": "Apply Scoring Algorithm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "jobs",
+        "columns": "raw_job_id, source_key, title, url, posted_at, category, skills, remote, applicants_min, applicants_max, ehr_twd, score, breakdown, reasons_top, reasons_positive, reasons_negative, fx_as_of",
+        "additionalFields": {
+          "mode": "upsert",
+          "upsertKeyColumns": "raw_job_id"
+        }
+      },
+      "id": "insert-scored-job",
+      "name": "Insert Scored Job",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "FA PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/risk-assessment",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "jobId": "={{ $json.id }}",
+            "score": "={{ $json.score }}",
+            "source": "scoring-pipeline"
+          }
+        }
+      },
+      "id": "trigger-risk-assessment",
+      "name": "Trigger Risk Assessment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1120,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Yourator Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Yourator Jobs": {
+      "main": [
+        [
+          {
+            "node": "Normalize Job Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Job Data": {
+      "main": [
+        [
+          {
+            "node": "Apply Scoring Algorithm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Scoring Algorithm": {
+      "main": [
+        [
+          {
+            "node": "Insert Scored Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Scored Job": {
+      "main": [
+        [
+          {
+            "node": "Trigger Risk Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Risk Assessment": {
+      "main": [
+        [
+          {
+            "node": "Check for Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Errors": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Send Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "job-scoring-pipeline",
+  "tags": [
+    "scoring",
+    "pipeline",
+    "automation"
+  ]
+}
